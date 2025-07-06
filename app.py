@@ -22,6 +22,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# SERVICE_KEY 설정 (인코딩된 키)
+SERVICE_KEY = "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ+6+ZLqqvW6k/ffQ5ZOOYzzcSo0Fq4u3Lfg=="
+
 # 제목 및 설명
 st.title("🏢 주민대피시설 현황 대시보드")
 st.markdown("---")
@@ -29,19 +32,6 @@ st.markdown("**행정안전부 통계연보 - 지역별 주민대피시설 현�
 
 # 사이드바 설정
 st.sidebar.header("📊 데이터 설정")
-
-# SERVICE_KEY 입력
-service_key = st.sidebar.text_input(
-    "🔑 SERVICE_KEY 입력",
-    value="",
-    type="password",
-    help="공공데이터포털에서 발급받은 인증키를 입력하세요."
-)
-
-if not service_key:
-    st.warning("⚠️ SERVICE_KEY를 입력해야 데이터를 조회할 수 있습니다.")
-    st.info("공공데이터포털(data.go.kr)에서 '행정안전부_통계연보_지역별 주민대피시설' API의 인증키를 발급받아 입력하세요.")
-    st.stop()
 
 # 연도 선택 (2019~2025, 역순)
 selected_year = st.sidebar.selectbox(
@@ -152,13 +142,13 @@ def preprocess_data(raw_data):
     df = df.fillna(0)
     
     # '합계' 행 제거 (전체 통계는 별도 처리)
-    df = df[df['regi'] != '합계'].copy()
+    df_filtered = df[df['regi'] != '합계'].copy()
     
-    return df
+    return df_filtered
 
 # 데이터 로드
 with st.spinner("📡 데이터를 불러오는 중..."):
-    raw_data = fetch_air_raid_shelter_data(service_key, selected_year)
+    raw_data = fetch_air_raid_shelter_data(SERVICE_KEY, selected_year)
     
     if raw_data is None:
         st.stop()
@@ -210,6 +200,7 @@ if 'accpt_rt' in filtered_df.columns:
     ]
 
 # 메인 대시보드
+st.markdown("### 📊 주요 지표")
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
@@ -288,14 +279,14 @@ with tab1:
     
     with col1:
         st.markdown("**🔝 수용률 Top 10**")
-        if 'accpt_rt' in filtered_df.columns:
-            top10 = filtered_df.nlargest(10, 'accpt_rt')
+        if 'accpt_rt' in filtered_df.columns and len(filtered_df) > 0:
+            top10 = filtered_df.nlargest(min(10, len(filtered_df)), 'accpt_rt')
             fig = px.bar(
                 top10, 
                 x='accpt_rt', 
                 y='regi',
                 orientation='h',
-                title="수용률 상위 10개 지역",
+                title="수용률 상위 지역",
                 labels={'accpt_rt': '수용률(%)', 'regi': '지역'},
                 color='accpt_rt',
                 color_continuous_scale='Greens'
@@ -305,14 +296,14 @@ with tab1:
     
     with col2:
         st.markdown("**🔻 수용률 Bottom 10**")
-        if 'accpt_rt' in filtered_df.columns:
-            bottom10 = filtered_df.nsmallest(10, 'accpt_rt')
+        if 'accpt_rt' in filtered_df.columns and len(filtered_df) > 0:
+            bottom10 = filtered_df.nsmallest(min(10, len(filtered_df)), 'accpt_rt')
             fig = px.bar(
                 bottom10, 
                 x='accpt_rt', 
                 y='regi',
                 orientation='h',
-                title="수용률 하위 10개 지역",
+                title="수용률 하위 지역",
                 labels={'accpt_rt': '수용률(%)', 'regi': '지역'},
                 color='accpt_rt',
                 color_continuous_scale='Reds'
@@ -325,7 +316,7 @@ with tab2:
     
     with col1:
         st.markdown("**👥 대상인구 vs 대피가능인구**")
-        if 'target_popl' in filtered_df.columns and 'shelt_abl_popl_smry' in filtered_df.columns:
+        if 'target_popl' in filtered_df.columns and 'shelt_abl_popl_smry' in filtered_df.columns and len(filtered_df) > 0:
             fig = px.scatter(
                 filtered_df,
                 x='target_popl',
@@ -338,22 +329,22 @@ with tab2:
                 }
             )
             # 대각선 추가 (수용률 100% 기준선)
-            max_val = max(filtered_df['target_popl'].max(), filtered_df['shelt_abl_popl_smry'].max())
-            fig.add_shape(
-                type="line",
-                x0=0, y0=0, x1=max_val, y1=max_val,
-                line=dict(color="red", width=2, dash="dash"),
-                name="100% 수용률 기준선"
-            )
+            if len(filtered_df) > 0:
+                max_val = max(filtered_df['target_popl'].max(), filtered_df['shelt_abl_popl_smry'].max())
+                fig.add_shape(
+                    type="line",
+                    x0=0, y0=0, x1=max_val, y1=max_val,
+                    line=dict(color="red", width=2, dash="dash"),
+                )
             st.plotly_chart(fig, use_container_width=True)
     
     with col2:
         st.markdown("**📊 인구 분포**")
-        if 'target_popl' in filtered_df.columns:
+        if 'target_popl' in filtered_df.columns and len(filtered_df) > 0:
             fig = px.histogram(
                 filtered_df,
                 x='target_popl',
-                nbins=20,
+                nbins=min(20, len(filtered_df)),
                 title="대상인구 분포",
                 labels={'target_popl': '대상인구(명)', 'count': '지역 수'}
             )
@@ -364,7 +355,7 @@ with tab3:
     
     with col1:
         st.markdown("**🏢 시설 수 vs 면적**")
-        if 'pub_shelts_shelts' in filtered_df.columns and 'pub_shelts_area' in filtered_df.columns:
+        if 'pub_shelts_shelts' in filtered_df.columns and 'pub_shelts_area' in filtered_df.columns and len(filtered_df) > 0:
             fig = px.scatter(
                 filtered_df,
                 x='pub_shelts_shelts',
@@ -380,31 +371,30 @@ with tab3:
     
     with col2:
         st.markdown("**📊 시설 유형별 비교**")
-        if 'gov_shelts_shelts' in filtered_df.columns and 'pub_shelts_shelts' in filtered_df.columns:
+        if 'gov_shelts_shelts' in filtered_df.columns and 'pub_shelts_shelts' in filtered_df.columns and len(filtered_df) > 0:
             # 시설 유형별 합계 계산
             gov_total = filtered_df['gov_shelts_shelts'].sum()
             pub_total = filtered_df['pub_shelts_shelts'].sum()
             
-            fig = px.pie(
-                values=[gov_total, pub_total],
-                names=['정부지원시설', '공공용시설'],
-                title="시설 유형별 비율"
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            if gov_total + pub_total > 0:
+                fig = px.pie(
+                    values=[gov_total, pub_total],
+                    names=['정부지원시설', '공공용시설'],
+                    title="시설 유형별 비율"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("시설 데이터가 없습니다.")
 
 with tab4:
-    st.markdown("**🗺️ 지역별 수용률 히트맵**")
+    st.markdown("**🗺️ 지역별 수용률 현황**")
     
-    if 'accpt_rt' in filtered_df.columns:
+    if 'accpt_rt' in filtered_df.columns and len(filtered_df) > 0:
         # 히트맵용 데이터 준비
-        heatmap_data = filtered_df.pivot_table(
-            index='regi',
-            values='accpt_rt',
-            aggfunc='mean'
-        ).reset_index()
+        heatmap_data = filtered_df.copy().sort_values('accpt_rt', ascending=True)
         
         fig = px.bar(
-            heatmap_data.sort_values('accpt_rt', ascending=True),
+            heatmap_data,
             x='accpt_rt',
             y='regi',
             orientation='h',
@@ -413,7 +403,7 @@ with tab4:
             color='accpt_rt',
             color_continuous_scale='RdYlGn'
         )
-        fig.update_layout(height=600)
+        fig.update_layout(height=max(400, len(filtered_df) * 25))
         st.plotly_chart(fig, use_container_width=True)
 
 # 추가 분석
@@ -424,9 +414,9 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.markdown("**🏆 수용률 통계**")
-    if 'accpt_rt' in filtered_df.columns:
+    if 'accpt_rt' in filtered_df.columns and len(filtered_df) > 0:
         stats_df = pd.DataFrame({
-            '통계': ['평균', '중앙값', '최대값', '최소값', '표준편차'],
+            '통계': ['평균', '중앙값', '최댓값', '최솟값', '표준편차'],
             '수용률(%)': [
                 filtered_df['accpt_rt'].mean(),
                 filtered_df['accpt_rt'].median(),
@@ -440,7 +430,7 @@ with col1:
 
 with col2:
     st.markdown("**🏢 시설 통계**")
-    if 'pub_shelts_shelts' in filtered_df.columns:
+    if 'pub_shelts_shelts' in filtered_df.columns and len(filtered_df) > 0:
         facility_stats = pd.DataFrame({
             '통계': ['총 시설 수', '평균 시설 수', '최대 시설 수', '최소 시설 수'],
             '값': [
@@ -453,14 +443,34 @@ with col2:
         facility_stats['값'] = facility_stats['값'].round(0).astype(int)
         st.dataframe(facility_stats, use_container_width=True)
 
+# 상세 정보 섹션
+with st.expander("📋 API 상세 정보"):
+    st.markdown(f"""
+    **API 정보:**
+    - **서비스명**: 행정안전부_통계연보_지역별 주민대피시설
+    - **엔드포인트**: `https://apis.data.go.kr/1741000/AirRaidShelterRegion/getAirRaidShelterRegionList`
+    - **현재 조회 연도**: {selected_year}
+    - **데이터 갱신주기**: 연 1회
+    - **응답 형식**: JSON
+    
+    **데이터 컬럼 설명:**
+    - `target_popl`: 대상인구(명)
+    - `accpt_rt`: 수용률(%)
+    - `shelt_abl_popl_smry`: 대피가능인구 계(명)
+    - `pub_shelts_shelts`: 공공용시설 수(개소)
+    - `pub_shelts_area`: 공공용시설 면적(㎡)
+    - `gov_shelts_shelts`: 정부지원시설 수(개소)
+    - `gov_shelts_area`: 정부지원시설 면적(㎡)
+    """)
+
 # 푸터
 st.markdown("---")
 st.markdown(
-    """
+    f"""
     <div style='text-align: center; color: #666; font-size: 12px;'>
         📊 데이터 출처: 행정안전부 통계연보 (data.go.kr)<br>
-        🔄 데이터 갱신주기: 연 1회<br>
-        📅 대시보드 기준일: 2025년 7월 6일
+        🔄 데이터 갱신주기: 연 1회 | 📅 조회 기준연도: {selected_year}년<br>
+        📈 대시보드 생성일: 2025년 7월 6일
     </div>
     """,
     unsafe_allow_html=True
