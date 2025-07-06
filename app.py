@@ -1,139 +1,105 @@
-# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
-import numpy as np
+import requests
 import folium
 from streamlit_folium import st_folium
-import plotly.express as px
-from datetime import datetime
 
-# 페이지 설정
-st.set_page_config(
-    page_title="주민대피시설 통계 대시보드",
-    page_icon="🏠",
-    layout="wide"
-)
+# -------------------------------
+# 🔐 API 설정
+# -------------------------------
+API_KEY = "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ%2B6%2BZLqqvW6k%2FfFQ5ZOOYzzcSo0Fq4u3Lfg%3D%3D"
+API_URL = f"http://apis.data.go.kr/1741000/EmergencyShelter2/getEmergencyShelterList2?serviceKey={API_KEY}&pageNo=1&numOfRows=1000&type=json"
 
-# 스타일
-st.markdown("<h1 style='text-align: center; color: black;'>🏠 주민대피시설 통계 대시보드</h1>", unsafe_allow_html=True)
+# -------------------------------
+# 🧹 수용률 계산 함수
+# -------------------------------
+def compute_acceptance_rate(row):
+    try:
+        return round((int(row["shel_av"])/int(row["peop_cnt"]))*100, 1)
+    except:
+        return None
 
-# 샘플 데이터 (API 대체)
-@st.cache_data
-def load_data():
-    data = pd.DataFrame({
-        'regi': ['서울특별시 종로구', '부산광역시 중구'],
-        'lat': [37.572, 35.105],
-        'lon': [126.976, 129.033],
-        'target_popl': [45000, 31000],
-        'shell_abl_popl_smry': [52000, 28000],
-        'gov_shells_shells': [12, 7],
-        'gov_shells_area': [8500, 4800],
-        'pub_shells_shells': [8, 5],
-        'pub_shells_area': [5200, 3200]
-    })
-    data["accpt_rt"] = (data["shell_abl_popl_smry"] / data["target_popl"]) * 100
-    data["capacity_level"] = pd.cut(data["accpt_rt"], bins=[0, 50, 80, 100, float("inf")],
-                                     labels=["부족", "보통", "양호", "충분"])
-    data["total_facilities"] = data["gov_shells_shells"] + data["pub_shells_shells"]
-    data["total_area"] = data["gov_shells_area"] + data["pub_shells_area"]
-    return data
+# -------------------------------
+# 📡 API 호출 함수
+# -------------------------------
+@st.cache_data(ttl=3600)
+def fetch_data():
+    try:
+        response = requests.get(API_URL)
+        if response.status_code == 200:
+            data = response.json()
+            df = pd.DataFrame(data['EmergencyShelter'][1:])  # [0]은 메타 정보
+            df["shel_av"] = df["shel_av"].astype(int)
+            df["peop_cnt"] = df["peop_cnt"].astype(int)
+            df["acceptance_rate"] = df.apply(compute_acceptance_rate, axis=1)
+            df["lat"] = df["lat"].astype(float)
+            df["lon"] = df["lon"].astype(float)
+            return df
+        else:
+            st.warning("❌ API 호출 실패, 샘플 데이터를 사용합니다.")
+            return None
+    except Exception as e:
+        st.error(f"API 연동 중 오류 발생: {e}")
+        return None
 
-df = load_data()
+# -------------------------------
+# 🎨 지도 생성 함수
+# -------------------------------
+def create_map(df):
+    m = folium.Map(location=[36.5, 127.8], zoom_start=7)
+    for _, row in df.iterrows():
+        rate = row["acceptance_rate"]
+        color = "green" if rate >= 100 else "orange" if rate >= 70 else "red"
+        popup_text = f"""
+        📍 {row['shel_nm']}<br>
+        📌 {row['address']}<br>
+        👥 대상 인구: {row['peop_cnt']}명<br>
+        🛏️ 수용 가능 인원: {row['shel_av']}명<br>
+        📊 수용률: {rate}%
+        """
+        folium.CircleMarker(
+            location=[row['lat'], row['lon']],
+            radius=6,
+            color=color,
+            fill=True,
+            fill_opacity=0.7,
+            popup=popup_text
+        ).add_to(m)
+    return m
 
-# 사이드바 필터
-st.sidebar.header("🔍 필터 옵션")
-regions = ["전체"] + sorted(df["regi"].unique().tolist())
-selected_region = st.sidebar.selectbox("지역 선택", regions)
+# -------------------------------
+# 🖼️ Streamlit UI 시작
+# -------------------------------
+st.set_page_config(page_title="주민대피시설 통계 대시보드", layout="wide")
+st.title("🏠 주민대피시설 통계 대시보드")
 
-min_rt, max_rt = st.sidebar.slider("수용률 범위 (%)", 0, 200, (0, 200))
-filtered_df = df.copy()
+# 데이터 불러오기
+data = fetch_data()
 
-if selected_region != "전체":
-    filtered_df = filtered_df[filtered_df["regi"] == selected_region]
-filtered_df = filtered_df[(filtered_df["accpt_rt"] >= min_rt) & (filtered_df["accpt_rt"] <= max_rt)]
+if data is not None:
+    # 지역 필터링
+    regions = data["sido"].dropna().unique().tolist()
+    selected_region = st.sidebar.selectbox("📍 시도 선택", ["전체"] + regions)
 
-# ✅ 요약 통계 카드
-st.markdown("## 📊 주요 통계")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("총 지역 수", f"{len(filtered_df)}개")
-col2.metric("총 대피시설 수", f"{filtered_df['total_facilities'].sum():,}개")
-col3.metric("전국 평균 수용률", f"{filtered_df['accpt_rt'].mean():.1f}%")
-col4.metric("총 대상 인구", f"{filtered_df['target_popl'].sum():,}명")
+    if selected_region != "전체":
+        filtered_data = data[data["sido"] == selected_region]
+    else:
+        filtered_data = data
 
-# 🗺️ 지도 시각화
-st.markdown("## 🗺️ 지역별 대피시설 지도")
-m = folium.Map(location=[36.5, 127.9], zoom_start=6)
+    # 지도 시각화
+    st.subheader("🗺️ 대피시설 지도 보기")
+    folium_map = create_map(filtered_data)
+    st_folium(folium_map, width=1000, height=600)
 
-color_map = {
-    "부족": "red",
-    "보통": "orange",
-    "양호": "yellow",
-    "충분": "green"
-}
+    # 요약 통계
+    st.subheader("📊 통계 요약")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("🧍‍ 인구 총합", f"{filtered_data['peop_cnt'].sum():,} 명")
+    col2.metric("🛌 수용 가능 인원", f"{filtered_data['shel_av'].sum():,} 명")
+    col3.metric("📈 평균 수용률", f"{filtered_data['acceptance_rate'].mean():.1f}%")
 
-for _, row in filtered_df.iterrows():
-    popup_text = f"""
-    <b>{row['regi']}</b><br>
-    대상 인구: {row['target_popl']}명<br>
-    수용 가능: {row['shell_abl_popl_smry']}명<br>
-    수용률: {row['accpt_rt']:.1f}%
-    """
-    folium.CircleMarker(
-        location=(row["lat"], row["lon"]),
-        radius=10,
-        color=color_map[row["capacity_level"]],
-        fill=True,
-        fill_opacity=0.7,
-        popup=popup_text
-    ).add_to(m)
-
-st_folium(m, width=900)
-
-# 수용률 분포 히트맵
-st.markdown("## 🔥 수용률 등급별 지역 분포")
-fig = px.histogram(filtered_df, x="capacity_level", color="capacity_level",
-                   color_discrete_map=color_map,
-                   labels={"capacity_level": "수용률 등급"}, title="수용률 분포")
-st.plotly_chart(fig, use_container_width=True)
-
-# 상세 분석
-st.markdown("## 🔍 지역별 상세 분석")
-col5, col6 = st.columns(2)
-
-with col5:
-    st.subheader("🔴 수용률 부족 지역 Top 10")
-    low_df = filtered_df.nsmallest(10, "accpt_rt")[["regi", "accpt_rt", "target_popl", "shell_abl_popl_smry"]]
-    st.dataframe(low_df.rename(columns={"regi": "지역", "accpt_rt": "수용률(%)", 
-                                        "target_popl": "대상인구", "shell_abl_popl_smry": "수용가능"}))
-
-with col6:
-    st.subheader("🟢 수용률 우수 지역 Top 10")
-    high_df = filtered_df.nlargest(10, "accpt_rt")[["regi", "accpt_rt", "target_popl", "shell_abl_popl_smry"]]
-    st.dataframe(high_df.rename(columns={"regi": "지역", "accpt_rt": "수용률(%)", 
-                                         "target_popl": "대상인구", "shell_abl_popl_smry": "수용가능"}))
-
-# 비상연락처 및 대피요령
-st.markdown("## 🚨 비상연락처 및 대피요령")
-col7, col8 = st.columns(2)
-
-with col7:
-    st.markdown("""
-    **📞 비상연락처**
-    - 종합상황실: 119  
-    - 경찰서: 112  
-    - 소방서: 119  
-    - 군부대/구청: 지역별 상이
-    """)
-
-with col8:
-    st.markdown("""
-    **🏃 대피요령**
-    1. 경보 발령 시 즉시 대피  
-    2. 가까운 대피시설로 이동  
-    3. 신분증 및 생필품 지참  
-    4. 질서 있게 이동  
-    5. 시설 내 안전 수칙 준수  
-    """)
-
-st.markdown("---")
-st.markdown("<div style='text-align: center; font-size: 0.9em;'>📊 데이터 출처: 공공데이터포털 | ⏱️ 자동 갱신 예정</div>", unsafe_allow_html=True)
+    # 데이터 미리보기
+    with st.expander("🔎 데이터 미리보기"):
+        st.dataframe(filtered_data[["sido", "gugun", "shel_nm", "peop_cnt", "shel_av", "acceptance_rate", "address"]])
+else:
+    st.warning("API 연동에 실패하여 대체 데이터를 사용할 수 없습니다.")
