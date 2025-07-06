@@ -15,8 +15,9 @@ matplotlib>=3.7.0
 folium>=0.14.0
 streamlit-folium>=0.13.0
 
-# HTTP 요청
+# HTTP 요청 및 SSL 처리
 requests>=2.31.0
+urllib3>=1.26.0
 
 # 추가 유틸리티
 Pillow>=9.5.0
