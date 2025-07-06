@@ -59,98 +59,79 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # 캐시 데코레이터로 API 호출 최적화
-@st.cache_data(ttl=3600)  # 1시간 캐시
+@st.cache_data(ttl=3600)
 def fetch_shelter_data():
     """API에서 주민대피시설 데이터 가져오기"""
     
-    service_key = "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ%2B6%2BZLqqvW6k%2FffQ5ZOOYzzcSo0Fq4u3Lfg%3D%3D"
-    # HTTPS를 HTTP로 변경 - 공공데이터포털 SSL 이슈 해결
-    base_url = "http://apis.data.go.kr/1741000/AirRaidShelterRegion"
+    # 여러 API 엔드포인트 시도
+    api_configs = [
+        {
+            "url": "http://apis.data.go.kr/1741000/AirRaidShelterRegion",
+            "key": "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ+6+ZLqqvW6k/ffQ5ZOOYzzcSo0Fq4u3Lfg=="
+        },
+        # 다른 API 설정들 추가 가능
+    ]
     
-    all_data = []
-    page = 1
-    
-    try:
-        while True:
+    for config in api_configs:
+        try:
+            st.info(f"API 연결 시도 중: {config['url']}")
+            
             params = {
-                "serviceKey": service_key,
-                "pageNo": page,
-                "numOfRows": 100,  # 한 번에 가져올 데이터 수 줄임
+                "serviceKey": config["key"],
+                "pageNo": 1,
+                "numOfRows": 50,
                 "type": "json"
             }
             
-            # 일반 HTTP 요청으로 변경
             response = requests.get(
-                base_url, 
+                config["url"], 
                 params=params, 
-                timeout=30,
+                timeout=10,
                 headers={
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                     'Accept': 'application/json'
                 }
             )
             
-            if response.status_code != 200:
-                st.error(f"API 요청 실패: 상태 코드 {response.status_code}")
-                st.error(f"응답 내용: {response.text[:500]}")
-                break
-                
-            try:
-                data = response.json()
-                st.info(f"API 응답 구조 확인: {list(data.keys())}")  # 디버깅용
-            except json.JSONDecodeError as e:
-                st.error(f"JSON 응답 파싱 실패: {str(e)}")
-                st.error(f"응답 내용: {response.text[:500]}")
-                break
+            st.info(f"응답 상태 코드: {response.status_code}")
             
-            # 다양한 API 응답 구조 처리
-            items = []
-            if 'response' in data and 'body' in data['response']:
-                items = data['response']['body'].get('items', [])
-                total_count = data['response']['body'].get('totalCount', 0)
-            elif 'items' in data:
-                items = data.get('items', [])
-                total_count = len(items)
-            elif isinstance(data, list):
-                items = data
-                total_count = len(items)
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    st.success("API 연결 성공!")
+                    return process_api_response(data)
+                except json.JSONDecodeError:
+                    st.warning("JSON 파싱 실패, 다음 API 시도...")
+                    continue
             else:
-                st.error("예상과 다른 API 응답 구조")
-                st.json(data)  # 실제 응답 구조 확인용
-                break
-            
-            if not items:
-                if page == 1:
-                    st.warning("첫 페이지에서 데이터가 없습니다. API 응답을 확인해주세요.")
-                break
+                st.warning(f"API 요청 실패 (상태코드: {response.status_code})")
+                if response.status_code == 500:
+                    st.error("서버 내부 오류 또는 API 키 문제")
+                elif response.status_code == 403:
+                    st.error("API 접근 권한 없음")
+                continue
                 
-            all_data.extend(items)
-            st.info(f"페이지 {page}: {len(items)}개 데이터 수집, 총 {len(all_data)}개")
-            
-            # 페이지네이션 처리
-            if len(items) < 100 or len(all_data) >= total_count:
-                break
-                
-            page += 1
-            
-            # 최대 10페이지까지만 (과도한 요청 방지)
-            if page > 10:
-                st.warning("최대 페이지 수에 도달했습니다.")
-                break
-                
-        if not all_data:
-            st.error("API에서 데이터를 받아오지 못했습니다.")
-            return None
-            
-        st.success(f"총 {len(all_data)}개의 데이터를 성공적으로 수집했습니다!")
-        return pd.DataFrame(all_data)
-        
-    except requests.exceptions.RequestException as e:
-        st.error(f"API 요청 중 네트워크 오류: {str(e)}")
-        return None
-    except Exception as e:
-        st.error(f"데이터 로딩 중 오류 발생: {str(e)}")
-        return None
+        except Exception as e:
+            st.warning(f"API 연결 오류: {str(e)}")
+            continue
+    
+    st.warning("모든 API 연결 시도 실패")
+    return None
+
+def process_api_response(data):
+    """API 응답 데이터 처리"""
+    items = []
+    
+    if 'response' in data and 'body' in data['response']:
+        items = data['response']['body'].get('items', [])
+    elif 'items' in data:
+        items = data.get('items', [])
+    elif isinstance(data, list):
+        items = data
+    
+    if items:
+        return pd.DataFrame(items)
+    return None
 
 @st.cache_data
 def create_sample_data():
@@ -181,7 +162,43 @@ def create_sample_data():
                            8800, 7800, 8400, 9200, 2900, 4700, 6400, 5300, 3300, 5800]
     }
     
-    return pd.DataFrame(sample_data)
+@st.cache_data
+def process_shelter_data(df):
+    """대피시설 데이터 전처리"""
+    
+    if df is None or df.empty:
+        return None
+    
+    # 수치형 컬럼 변환
+    numeric_columns = ['target_popl', 'accpt_rt', 'shell_abl_popl_smry', 
+                      'gov_shells_shells', 'gov_shells_area', 'pub_shells_shells', 'pub_shells_area']
+    
+    for col in numeric_columns:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # 결측치 처리
+    if 'regi' in df.columns:
+        df = df.dropna(subset=['regi'])
+    
+    # 수용률 계산 (없는 경우)
+    if 'accpt_rt' not in df.columns or df['accpt_rt'].isna().all():
+        df['accpt_rt'] = np.where(df['target_popl'] > 0, 
+                                 (df['shell_abl_popl_smry'] / df['target_popl'] * 100), 
+                                 0)
+    
+    # 수용률 범주 생성
+    df['capacity_level'] = pd.cut(df['accpt_rt'], 
+                                 bins=[0, 50, 80, 100, float('inf')], 
+                                 labels=['부족', '보통', '양호', '충분'])
+    
+    # 총 시설 수 계산
+    df['total_facilities'] = df['gov_shells_shells'].fillna(0) + df['pub_shells_shells'].fillna(0)
+    
+    # 총 면적 계산
+    df['total_area'] = df['gov_shells_area'].fillna(0) + df['pub_shells_area'].fillna(0)
+    
+    return df
     """대피시설 데이터 전처리"""
     
     if df is None or df.empty:
