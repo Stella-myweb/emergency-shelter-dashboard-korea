@@ -7,7 +7,7 @@ from streamlit_folium import st_folium
 # -------------------------------
 # 🔐 API 설정
 # -------------------------------
-API_KEY = "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ%2B6%2BZLqqvW6k%2FfFQ5ZOOYzzcSo0Fq4u3Lfg%3D%3D"
+API_KEY = "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ+6+ZLqqvW6k/ffQ5ZOOYzzcSo0Fq4u3Lfg=="
 API_URL = f"http://apis.data.go.kr/1741000/EmergencyShelter2/getEmergencyShelterList2?serviceKey={API_KEY}&pageNo=1&numOfRows=1000&type=json"
 
 # -------------------------------
