@@ -1,105 +1,115 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
+import numpy as np
 import requests
-import folium
-from streamlit_folium import st_folium
+import plotly.express as px
 
-# -------------------------------
-# 🔐 API 설정
-# -------------------------------
-API_KEY = "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ+6+ZLqqvW6k/ffQ5ZOOYzzcSo0Fq4u3Lfg=="
-API_URL = f"http://apis.data.go.kr/1741000/EmergencyShelter2/getEmergencyShelterList2?serviceKey={API_KEY}&pageNo=1&numOfRows=1000&type=json"
+st.set_page_config(page_title="🏠 주민대피시설 통계 대시보드", layout="wide")
 
-# -------------------------------
-# 🧹 수용률 계산 함수
-# -------------------------------
-def compute_acceptance_rate(row):
+# ✅ Decoding된 일반 인증키
+service_key = "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ+6+ZLqqvW6k/ffQ5ZOOYzzcSo0Fq4u3Lfg=="
+
+@st.cache_data
+def load_shelter_data(year="2019"):
+    """주민대피시설 통계 API 데이터 로드"""
+    url = "http://apis.data.go.kr/1741000/ShelterInfoOpenApi/getShelterInfo"
+    params = {
+        "serviceKey": service_key,
+        "pageNo": 1,
+        "numOfRows": 1000,
+        "type": "json",
+        "bas_yy": year,
+    }
+
     try:
-        return round((int(row["shel_av"])/int(row["peop_cnt"]))*100, 1)
-    except:
-        return None
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+        items = data.get("response", {}).get("body", {}).get("items", [])
+        df = pd.DataFrame(items)
 
-# -------------------------------
-# 📡 API 호출 함수
-# -------------------------------
-@st.cache_data(ttl=3600)
-def fetch_data():
-    try:
-        response = requests.get(API_URL)
-        if response.status_code == 200:
-            data = response.json()
-            df = pd.DataFrame(data['EmergencyShelter'][1:])  # [0]은 메타 정보
-            df["shel_av"] = df["shel_av"].astype(int)
-            df["peop_cnt"] = df["peop_cnt"].astype(int)
-            df["acceptance_rate"] = df.apply(compute_acceptance_rate, axis=1)
-            df["lat"] = df["lat"].astype(float)
-            df["lon"] = df["lon"].astype(float)
-            return df
-        else:
-            st.warning("❌ API 호출 실패, 샘플 데이터를 사용합니다.")
-            return None
+        # 수치형 변환 및 정리
+        num_cols = ["accept_rt", "target_popl", "shelt_abl_popl_smry", "lat", "lon", "tot_area"]
+        for col in num_cols:
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(",", ""), errors="coerce")
+        df = df.dropna(subset=["lat", "lon", "accept_rt"])
+
+        return df
     except Exception as e:
-        st.error(f"API 연동 중 오류 발생: {e}")
+        st.error(f"❌ API 호출 실패: {e}")
         return None
 
-# -------------------------------
-# 🎨 지도 생성 함수
-# -------------------------------
-def create_map(df):
-    m = folium.Map(location=[36.5, 127.8], zoom_start=7)
-    for _, row in df.iterrows():
-        rate = row["acceptance_rate"]
-        color = "green" if rate >= 100 else "orange" if rate >= 70 else "red"
-        popup_text = f"""
-        📍 {row['shel_nm']}<br>
-        📌 {row['address']}<br>
-        👥 대상 인구: {row['peop_cnt']}명<br>
-        🛏️ 수용 가능 인원: {row['shel_av']}명<br>
-        📊 수용률: {rate}%
-        """
-        folium.CircleMarker(
-            location=[row['lat'], row['lon']],
-            radius=6,
-            color=color,
-            fill=True,
-            fill_opacity=0.7,
-            popup=popup_text
-        ).add_to(m)
-    return m
-
-# -------------------------------
-# 🖼️ Streamlit UI 시작
-# -------------------------------
-st.set_page_config(page_title="주민대피시설 통계 대시보드", layout="wide")
+# 🎯 앱 타이틀
 st.title("🏠 주민대피시설 통계 대시보드")
+st.markdown("**행정안전부 제공 데이터를 활용하여 지역별 대피시설의 수용률과 분포를 시각화합니다.**")
 
-# 데이터 불러오기
-data = fetch_data()
+# 📦 데이터 불러오기
+with st.spinner("📡 대피시설 데이터를 불러오는 중입니다..."):
+    df = load_shelter_data()
 
-if data is not None:
-    # 지역 필터링
-    regions = data["sido"].dropna().unique().tolist()
-    selected_region = st.sidebar.selectbox("📍 시도 선택", ["전체"] + regions)
+if df is None or df.empty:
+    st.warning("데이터를 불러올 수 없습니다.")
+    st.stop()
 
-    if selected_region != "전체":
-        filtered_data = data[data["sido"] == selected_region]
-    else:
-        filtered_data = data
+# 📊 요약 지표
+st.subheader("📌 전국 통계 요약")
+col1, col2, col3 = st.columns(3)
+col1.metric("🏢 총 대피시설 수", len(df))
+col2.metric("👥 대상 인구 총합", f"{int(df['target_popl'].sum()):,} 명")
+col3.metric("📈 평균 수용률", f"{df['accept_rt'].mean():.1f}%")
 
-    # 지도 시각화
-    st.subheader("🗺️ 대피시설 지도 보기")
-    folium_map = create_map(filtered_data)
-    st_folium(folium_map, width=1000, height=600)
+# 🎛️ 필터
+st.sidebar.header("🔍 지역 필터")
+sido_options = ["전체"] + sorted(df["regi"].dropna().unique())
+selected_sido = st.sidebar.selectbox("시도 선택", sido_options)
 
-    # 요약 통계
-    st.subheader("📊 통계 요약")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("🧍‍ 인구 총합", f"{filtered_data['peop_cnt'].sum():,} 명")
-    col2.metric("🛌 수용 가능 인원", f"{filtered_data['shel_av'].sum():,} 명")
-    col3.metric("📈 평균 수용률", f"{filtered_data['acceptance_rate'].mean():.1f}%")
+if selected_sido != "전체":
+    df = df[df["regi"] == selected_sido]
 
-    # 데이터 미리보기
-    with st.expander("🔎 데이터 미리보기"):
-        st.dataframe(filtered_data[["sido", "gugun", "shel_nm", "peop_cnt", "shel_av", "acceptance_rate", "address"]])
-else:
-    st.warning("API 연동에 실패하여 대체 데이터를 사용할 수 없습니다.")
+rt_range = st.sidebar.slider("수용률 범위 설정 (%)", 0.0, 500.0, (0.0, 300.0))
+df = df[(df["accept_rt"] >= rt_range[0]) & (df["accept_rt"] <= rt_range[1])]
+
+# 🗺️ 지도 시각화
+st.subheader("🗺️ 대피시설 지도")
+color_map = df["accept_rt"].apply(
+    lambda x: "🔴 부족" if x < 100 else "🟡 보통" if x < 300 else "🟢 충분"
+)
+
+fig = px.scatter_mapbox(
+    df,
+    lat="lat",
+    lon="lon",
+    color=color_map,
+    hover_data=["orgnm", "target_popl", "shelt_abl_popl_smry", "accept_rt"],
+    zoom=5,
+    height=500
+)
+fig.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
+st.plotly_chart(fig, use_container_width=True)
+
+# 🔥 수용률 낮은 지역 Top 10
+st.subheader("🔥 수용률 낮은 대피시설 Top 10")
+low_top10 = df.sort_values(by="accept_rt").head(10)
+st.dataframe(low_top10[["regi", "orgnm", "target_popl", "shelt_abl_popl_smry", "accept_rt"]])
+
+# 🌡️ 히트맵 (시도별 평균 수용률)
+st.subheader("🌡️ 시도별 평균 수용률 히트맵")
+heat_df = df.groupby("regi")["accept_rt"].mean().reset_index()
+fig2 = px.density_heatmap(heat_df, x="regi", y="accept_rt", color_continuous_scale="RdYlGn", height=300)
+st.plotly_chart(fig2, use_container_width=True)
+
+# 📊 면적 대비 효율 분석
+if "tot_area" in df.columns and df["tot_area"].notna().sum() > 0:
+    st.subheader("📐 시설면적 대비 수용 가능 인구")
+    df["면적당_인구수용력"] = df["shelt_abl_popl_smry"] / df["tot_area"]
+    top_eff = df[df["면적당_인구수용력"].notna()].sort_values(by="면적당_인구수용력", ascending=False).head(10)
+    st.dataframe(top_eff[["regi", "orgnm", "tot_area", "shelt_abl_popl_smry", "면적당_인구수용력"]])
+
+# ℹ️ 실용 정보
+st.subheader("ℹ️ 실용 정보 안내")
+st.markdown("""
+- **내 지역 대피소 위치 확인**: 지도에서 시도 필터로 확인 가능
+- **가장 가까운 대피소 거리 계산**: 향후 업데이트 예정
+- **비상연락처 및 대피요령**: [행안부 재난안전포털](https://www.safekorea.go.kr)
+- **대피 행동요령**: [행동매뉴얼 바로가기](https://www.safekorea.go.kr/idsiSFK/neo/main/main.html)
+""")
