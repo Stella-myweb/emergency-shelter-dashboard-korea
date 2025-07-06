@@ -63,7 +63,7 @@ st.markdown("""
 def fetch_shelter_data():
     """API에서 주민대피시설 데이터 가져오기"""
     
-    service_key = "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ+6+ZLqqvW6k/ffQ5ZOOYzzcSo0Fq4u3Lfg=="
+    service_key = "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ%2B6%2BZLqqvW6k%2FffQ5ZOOYzzcSo0Fq4u3Lfg%3D%3D"
     # HTTPS를 HTTP로 변경 - 공공데이터포털 SSL 이슈 해결
     base_url = "http://apis.data.go.kr/1741000/AirRaidShelterRegion"
     
