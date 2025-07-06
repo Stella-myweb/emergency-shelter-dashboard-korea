@@ -15,18 +15,15 @@ st.set_page_config(
 )
 
 # Decoding된 일반 인증키
-SERVICE_KEY = (
-    "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ"
-    "+6+ZLqqvW6k/ffQ5ZOOYzzcSo0Fq4u3Lfg=="
-)
 
+SERVICE_KEY = "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ+6+ZLqqvW6k/ffQ5ZOOYzzcSo0Fq4u3Lfg=="
 @st.cache_data
 def load_region_data(year: str) -> pd.DataFrame:
     """
     행안부 지역별 주민대피시설 통계(API) 호출 후 전처리.
     HTTP + verify=False로 SSL 에러 우회, JSON 구조에 안전하게 대응.
     """
-    url = "http://apis.data.go.kr/1741000/AirRaidShelterRegion/getAirRaidShelterRegionList"
+    url = "http://apis.data.go.kr/1741000/AirRaidShelterRegion/getRestFrequentzoneFreezing"
     params = {
         "ServiceKey": SERVICE_KEY,
         "pageNo": 1,
