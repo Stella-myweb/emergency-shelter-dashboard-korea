@@ -15,15 +15,18 @@ st.set_page_config(
 )
 
 # Decoding된 일반 인증키
+SERVICE_KEY = (
+    "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ"
+    "+6+ZLqqvW6k/ffQ5ZOOYzzcSo0Fq4u3Lfg=="
+)
 
-SERVICE_KEY = "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ+6+ZLqqvW6k/ffQ5ZOOYzzcSo0Fq4u3Lfg=="
 @st.cache_data
 def load_region_data(year: str) -> pd.DataFrame:
     """
     행안부 지역별 주민대피시설 통계(API) 호출 후 전처리.
-    HTTP + verify=False로 SSL 에러 우회, JSON 구조에 안전하게 대응.
+    HTTP + verify=False로 SSL 에러 우회, JSON 구조에 안전 대응.
     """
-    url = "http://apis.data.go.kr/1741000/AirRaidShelterRegion/getRestFrequentzoneFreezing"
+    url = "http://apis.data.go.kr/1741000/AirRaidShelterRegion/getAirRaidShelterRegionList"
     params = {
         "ServiceKey": SERVICE_KEY,
         "pageNo": 1,
@@ -31,7 +34,6 @@ def load_region_data(year: str) -> pd.DataFrame:
         "type": "json",
         "bas_yy": year
     }
-
     try:
         resp = requests.get(url, params=params, timeout=10, verify=False)
         resp.raise_for_status()
@@ -44,16 +46,13 @@ def load_region_data(year: str) -> pd.DataFrame:
     body = data.get("response", {}).get("body", {})
     items_node = body.get("items", {})
     if isinstance(items_node, dict):
-        # items가 dict인 경우 'item' 키에 실제 리스트가 들어있음
         items = items_node.get("item", [])
     else:
-        # 이미 리스트 형태
         items = items_node
 
     df = pd.DataFrame(items)
-
+    # 컬럼 확인 실패 시 빈 DF 리턴
     if df.empty or "regi" not in df.columns:
-        # 컬럼 없거나 빈 DataFrame
         return pd.DataFrame()
 
     # 숫자형 컬럼 변환
@@ -71,7 +70,7 @@ def load_region_data(year: str) -> pd.DataFrame:
                  .astype(float)
         )
 
-    # 'regi' 결측치 있는 행 제거
+    # 'regi' 결측 제거
     df = df.dropna(subset=["regi"])
     return df
 
@@ -81,34 +80,29 @@ def main():
         "기준년도별 지역별 대피시설 대상인구·수용률·시설 수·면적 통계를 제공합니다."
     )
 
-    # 사이드바: 연도 선택 (2019~2025)
-    #years = [str(y) for y in range(2019, 2026)]
-    #year = st.sidebar.selectbox("📅 기준년도 선택", years)
-
-    years = [str(y) for y in range(2019, 2026)]
-    years.reverse()  # 혹은 years = list(reversed(years))
+    # 사이드바: 연도 선택 (2025→2019 순)
+    years = [str(y) for y in range(2025, 2018, -1)]
     year = st.sidebar.selectbox("📅 기준년도 선택", years)
-
     df = load_region_data(year)
     if df.empty:
-        st.warning("데이터를 불러올 수 없습니다.\n(연도, API 키, 네트워크 설정을 확인하세요.)")
+        st.warning("데이터를 불러올 수 없습니다.\n(년도, API 키, 네트워크 설정을 확인하세요.)")
         st.stop()
 
     # 전국 요약 지표
     st.subheader("📌 전국 요약 지표")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("🏢 지역 개수", f"{len(df):,}")
-    col2.metric("👥 대상 인구 합계", f"{int(df['target_popl'].sum()):,} 명")
-    col3.metric("📈 평균 수용률", f"{df['accpt_rt'].mean():.1f}%")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("🏢 지역 개수", f"{len(df):,}")
+    c2.metric("👥 대상 인구 합계", f"{int(df['target_popl'].sum()):,} 명")
+    c3.metric("📈 평균 수용률", f"{df['accpt_rt'].mean():.1f}%")
     total_fac = df["gov_shelts_shelts"].sum() + df["pub_shelts_shelts"].sum()
-    col4.metric("🏘️ 총 시설 수", f"{int(total_fac):,} 개")
+    c4.metric("🏘️ 총 시설 수", f"{int(total_fac):,} 개")
 
     # 필터: 지역, 수용률 범위
     st.sidebar.header("🔍 필터")
     regions = ["전체"] + sorted(df["regi"].unique().tolist())
-    sel_region = st.sidebar.selectbox("🌐 지역 선택", regions)
-    if sel_region != "전체":
-        df = df[df["regi"] == sel_region]
+    sel = st.sidebar.selectbox("🌐 지역 선택", regions)
+    if sel != "전체":
+        df = df[df["regi"] == sel]
 
     rt_min, rt_max = st.sidebar.slider(
         "📊 수용률 범위 (%)", 0.0, 2000.0, (0.0, 500.0)
