@@ -82,8 +82,13 @@ def main():
     )
 
     # 사이드바: 연도 선택 (2019~2025)
+    #years = [str(y) for y in range(2019, 2026)]
+    #year = st.sidebar.selectbox("📅 기준년도 선택", years)
+
     years = [str(y) for y in range(2019, 2026)]
+    years.reverse()  # 혹은 years = list(reversed(years))
     year = st.sidebar.selectbox("📅 기준년도 선택", years)
+
     df = load_region_data(year)
     if df.empty:
         st.warning("데이터를 불러올 수 없습니다.\n(연도, API 키, 네트워크 설정을 확인하세요.)")
