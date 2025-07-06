@@ -9,10 +9,14 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import json
 from datetime import datetime
 import folium
 from streamlit_folium import st_folium
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # 페이지 설정
 st.set_page_config(
@@ -62,6 +66,17 @@ def fetch_shelter_data():
     service_key = "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ+6+ZLqqvW6k/ffQ5ZOOYzzcSo0Fq4u3Lfg=="
     base_url = "https://apis.data.go.kr/1741000/AirRaidShelterRegion"
     
+    # 세션 설정
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
     all_data = []
     page = 1
     
@@ -74,16 +89,25 @@ def fetch_shelter_data():
                 "type": "json"
             }
             
-            response = requests.get(base_url, params=params, timeout=30)
+            # SSL 검증 비활성화하여 요청
+            response = session.get(
+                base_url, 
+                params=params, 
+                timeout=30,
+                verify=False,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            )
             
             if response.status_code != 200:
                 st.error(f"API 요청 실패: 상태 코드 {response.status_code}")
+                st.error(f"응답 내용: {response.text[:500]}")
                 break
                 
             try:
                 data = response.json()
-            except json.JSONDecodeError:
-                st.error("JSON 응답 파싱 실패")
+            except json.JSONDecodeError as e:
+                st.error(f"JSON 응답 파싱 실패: {str(e)}")
+                st.error(f"응답 내용: {response.text[:500]}")
                 break
             
             # API 응답 구조 확인
@@ -99,8 +123,15 @@ def fetch_shelter_data():
                     break
                     
                 page += 1
+            elif 'items' in data:  # 다른 구조일 경우
+                items = data.get('items', [])
+                if not items:
+                    break
+                all_data.extend(items)
+                page += 1
             else:
                 st.error("예상과 다른 API 응답 구조")
+                st.json(data)  # 실제 응답 구조 확인용
                 break
                 
         if not all_data:
@@ -109,6 +140,10 @@ def fetch_shelter_data():
             
         return pd.DataFrame(all_data)
         
+    except requests.exceptions.SSLError as e:
+        st.error(f"SSL 인증서 오류: {str(e)}")
+        st.info("SSL 인증서 문제로 인해 데이터를 가져올 수 없습니다. 관리자에게 문의하세요.")
+        return None
     except requests.exceptions.RequestException as e:
         st.error(f"API 요청 중 네트워크 오류: {str(e)}")
         return None
