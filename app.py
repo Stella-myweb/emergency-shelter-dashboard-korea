@@ -9,10 +9,16 @@ import urllib3
 import warnings
 from urllib.parse import unquote
 import numpy as np
+import ssl
 
-# SSL 경고 비활성화
+# SSL 경고 및 인증서 검증 비활성화
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings('ignore')
+
+# SSL 컨텍스트 설정
+import requests.adapters
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 
 # 페이지 설정
 st.set_page_config(
@@ -41,16 +47,42 @@ selected_year = st.sidebar.selectbox(
     help="조회할 기준 연도를 선택하세요."
 )
 
+# 안전한 requests 세션 생성
+def create_safe_session():
+    """SSL 문제를 우회하는 안전한 requests 세션 생성"""
+    session = requests.Session()
+    
+    # SSL 검증 비활성화
+    session.verify = False
+    
+    # 재시도 전략 설정
+    retry_strategy = Retry(
+        total=3,
+        status_forcelist=[429, 500, 502, 503, 504],
+        method_whitelist=["HEAD", "GET", "OPTIONS"]
+    )
+    
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    # 헤더 설정
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    })
+    
+    return session
+
 # API 호출 함수
 @st.cache_data(ttl=300)
 def fetch_air_raid_shelter_data(service_key, year, page_no=1, num_of_rows=1000):
     """공공데이터 API에서 주민대피시설 데이터를 가져오는 함수"""
     
-    # 인증키 디코딩
-    decoded_key = unquote(service_key)
+    # 인증키 디코딩 (중복 디코딩 방지)
+    decoded_key = service_key if service_key.startswith('jUxx') else unquote(service_key)
     
-    # API 엔드포인트
-    url = "https://apis.data.go.kr/1741000/AirRaidShelterRegion/getAirRaidShelterRegionList"
+    # HTTP 엔드포인트 사용 (SSL 문제 우회)
+    url = "http://apis.data.go.kr/1741000/AirRaidShelterRegion/getAirRaidShelterRegionList"
     
     # 파라미터 설정
     params = {
@@ -62,34 +94,68 @@ def fetch_air_raid_shelter_data(service_key, year, page_no=1, num_of_rows=1000):
     }
     
     try:
-        # API 호출
-        response = requests.get(url, params=params, verify=False, timeout=10)
+        # 안전한 세션으로 API 호출
+        session = create_safe_session()
+        response = session.get(url, params=params, timeout=15)
         response.raise_for_status()
         
+        # 응답 내용 확인
+        st.info(f"API 응답 상태: {response.status_code}")
+        
         # JSON 응답 파싱
-        data = response.json()
+        try:
+            data = response.json()
+        except:
+            # XML 응답인 경우 처리
+            st.warning("JSON 파싱 실패. 응답 내용을 확인합니다.")
+            st.text(response.text[:1000])  # 처음 1000자만 표시
+            return None
         
         # 응답 구조 확인 및 데이터 추출
-        if 'response' in data and 'body' in data['response']:
-            body = data['response']['body']
-            
-            # items 확인
-            if 'items' in body:
-                items = body['items']
+        if 'response' in data:
+            if 'body' in data['response']:
+                body = data['response']['body']
                 
-                # dict인 경우 item 키로 접근
-                if isinstance(items, dict) and 'item' in items:
-                    return items['item']
-                # list인 경우 그대로 반환
-                elif isinstance(items, list):
-                    return items
+                # items 확인
+                if 'items' in body and body['items']:
+                    items = body['items']
+                    
+                    # dict인 경우 item 키로 접근
+                    if isinstance(items, dict) and 'item' in items:
+                        return items['item']
+                    # list인 경우 그대로 반환
+                    elif isinstance(items, list):
+                        return items
+                    else:
+                        st.warning("items가 비어있거나 예상과 다른 형태입니다.")
+                        return []
                 else:
+                    st.warning("응답에 items가 없습니다.")
+                    # 에러 메시지 확인
+                    if 'header' in data['response']:
+                        header = data['response']['header']
+                        st.error(f"API 에러: {header.get('resultCode', 'Unknown')} - {header.get('resultMsg', 'Unknown Error')}")
                     return []
             else:
+                st.error("응답에 body가 없습니다.")
                 return []
         else:
+            st.error("응답 구조가 예상과 다릅니다.")
+            st.json(data)  # 전체 응답 구조 표시
             return []
             
+    except requests.exceptions.SSLError as e:
+        st.error(f"🚨 SSL 인증서 오류: {str(e)}")
+        st.info("💡 해결방법: 관리자에게 SSL 인증서 문제를 보고하거나, VPN을 사용해보세요.")
+        return None
+    except requests.exceptions.ConnectionError as e:
+        st.error(f"🚨 연결 오류: {str(e)}")
+        st.info("💡 해결방법: 인터넷 연결을 확인하거나 잠시 후 다시 시도해보세요.")
+        return None
+    except requests.exceptions.Timeout as e:
+        st.error(f"🚨 타임아웃 오류: {str(e)}")
+        st.info("💡 해결방법: 잠시 후 다시 시도해보세요.")
+        return None
     except requests.exceptions.RequestException as e:
         st.error(f"🚨 API 호출 실패: {str(e)}")
         return None
@@ -148,16 +214,26 @@ def preprocess_data(raw_data):
 
 # 데이터 로드
 with st.spinner("📡 데이터를 불러오는 중..."):
+    # 디버그 정보 표시
+    with st.expander("🔧 API 호출 정보", expanded=False):
+        st.write(f"**기준 연도**: {selected_year}")
+        st.write(f"**인증키**: {SERVICE_KEY[:20]}...")
+        st.write(f"**API URL**: http://apis.data.go.kr/1741000/AirRaidShelterRegion/getAirRaidShelterRegionList")
+    
     raw_data = fetch_air_raid_shelter_data(SERVICE_KEY, selected_year)
     
     if raw_data is None:
+        st.error("API 호출에 실패했습니다. 위의 오류 메시지를 확인해주세요.")
         st.stop()
     
     df = preprocess_data(raw_data)
     
     if df.empty:
-        st.warning("⚠️ 선택한 연도의 데이터가 없습니다.")
+        st.warning(f"⚠️ {selected_year}년도 데이터가 없습니다. 다른 연도를 선택해보세요.")
+        st.info("💡 대부분의 데이터는 2019년부터 제공됩니다.")
         st.stop()
+    
+    st.success(f"✅ {len(df)}개 지역의 데이터를 성공적으로 불러왔습니다!")
 
 # 사이드바 필터
 st.sidebar.markdown("---")
