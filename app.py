@@ -6,7 +6,7 @@ import requests
 import plotly.express as px
 import urllib3
 
-# SSL 경고 비활성화 (verify=False 시 출력 방지)
+# SSL 경고 비활성화
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 st.set_page_config(
@@ -24,9 +24,8 @@ SERVICE_KEY = (
 def load_region_data(year: str) -> pd.DataFrame:
     """
     행안부 지역별 주민대피시설 통계(API) 호출 후 전처리.
-    HTTP 사용 + SSL 검증 비활성화로 SSL 핸드셰이크 오류 우회.
+    HTTP + verify=False로 SSL 에러 우회, JSON 구조에 안전하게 대응.
     """
-    # HTTP로 요청하여 SSL 이슈 회피
     url = "http://apis.data.go.kr/1741000/AirRaidShelterRegion/getAirRaidShelterRegionList"
     params = {
         "ServiceKey": SERVICE_KEY,
@@ -35,17 +34,32 @@ def load_region_data(year: str) -> pd.DataFrame:
         "type": "json",
         "bas_yy": year
     }
+
     try:
         resp = requests.get(url, params=params, timeout=10, verify=False)
         resp.raise_for_status()
-        body = resp.json().get("response", {}).get("body", {})
-        items = body.get("items", [])
-        df = pd.DataFrame(items)
+        data = resp.json()
     except Exception as e:
-        st.error(f"API 호출 오류: {e}")
+        st.error(f"API 호출 실패: {e}")
         return pd.DataFrame()
 
-    # 숫자 컬럼 전처리
+    # 안전한 JSON 파싱
+    body = data.get("response", {}).get("body", {})
+    items_node = body.get("items", {})
+    if isinstance(items_node, dict):
+        # items가 dict인 경우 'item' 키에 실제 리스트가 들어있음
+        items = items_node.get("item", [])
+    else:
+        # 이미 리스트 형태
+        items = items_node
+
+    df = pd.DataFrame(items)
+
+    if df.empty or "regi" not in df.columns:
+        # 컬럼 없거나 빈 DataFrame
+        return pd.DataFrame()
+
+    # 숫자형 컬럼 변환
     num_cols = [
         "target_popl", "accpt_rt", "shelt_abl_popl_smry",
         "shelt_abl_popl_gov_shelts", "shelt_abl_popl_pub_shelts",
@@ -53,51 +67,53 @@ def load_region_data(year: str) -> pd.DataFrame:
         "pub_shelts_shelts", "pub_shelts_area"
     ]
     for c in num_cols:
-        if c in df.columns:
-            df[c] = (
-                df[c].astype(str)
-                     .str.replace(",", "")
-                     .replace("", np.nan)
-                     .astype(float)
-            )
-    return df.dropna(subset=["regi"])
+        df[c] = (
+            df[c].astype(str)
+                 .str.replace(",", "")
+                 .replace("", np.nan)
+                 .astype(float)
+        )
+
+    # 'regi' 결측치 있는 행 제거
+    df = df.dropna(subset=["regi"])
+    return df
 
 def main():
     st.title("🏠 지역별 주민대피시설 통계 대시보드")
-    st.markdown("기준년도별 지역별 대피시설 대상인구·수용률·시설 수·면적 통계를 제공합니다.")
+    st.markdown(
+        "기준년도별 지역별 대피시설 대상인구·수용률·시설 수·면적 통계를 제공합니다."
+    )
 
     # 사이드바: 연도 선택 (2019~2025)
-    year = st.sidebar.selectbox(
-        "📅 기준년도 선택",
-        [str(y) for y in range(2019, 2026)]
-    )
+    years = [str(y) for y in range(2019, 2026)]
+    year = st.sidebar.selectbox("📅 기준년도 선택", years)
     df = load_region_data(year)
     if df.empty:
-        st.warning("데이터를 불러올 수 없습니다.\n(HTTP/SSL 설정 또는 API 키 확인)")
+        st.warning("데이터를 불러올 수 없습니다.\n(연도, API 키, 네트워크 설정을 확인하세요.)")
         st.stop()
 
     # 전국 요약 지표
     st.subheader("📌 전국 요약 지표")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("🏢 지역 개수", f"{len(df):,}")
-    c2.metric("👥 대상 인구 합계", f"{int(df['target_popl'].sum()):,} 명")
-    c3.metric("📈 평균 수용률", f"{df['accpt_rt'].mean():.1f}%")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("🏢 지역 개수", f"{len(df):,}")
+    col2.metric("👥 대상 인구 합계", f"{int(df['target_popl'].sum()):,} 명")
+    col3.metric("📈 평균 수용률", f"{df['accpt_rt'].mean():.1f}%")
     total_fac = df["gov_shelts_shelts"].sum() + df["pub_shelts_shelts"].sum()
-    c4.metric("🏘️ 총 시설 수", f"{int(total_fac):,} 개")
+    col4.metric("🏘️ 총 시설 수", f"{int(total_fac):,} 개")
 
-    # 지역 & 수용률 필터
+    # 필터: 지역, 수용률 범위
     st.sidebar.header("🔍 필터")
     regions = ["전체"] + sorted(df["regi"].unique().tolist())
-    sel = st.sidebar.selectbox("🌐 지역 선택", regions)
-    if sel != "전체":
-        df = df[df["regi"] == sel]
+    sel_region = st.sidebar.selectbox("🌐 지역 선택", regions)
+    if sel_region != "전체":
+        df = df[df["regi"] == sel_region]
 
     rt_min, rt_max = st.sidebar.slider(
-        "📊 수용률 범위 (%)", 0.0, 1000.0, (0.0, 500.0)
+        "📊 수용률 범위 (%)", 0.0, 2000.0, (0.0, 500.0)
     )
     df = df[(df["accpt_rt"] >= rt_min) & (df["accpt_rt"] <= rt_max)]
 
-    # 데이터 테이블
+    # 통계표
     st.subheader("📋 지역별 통계표")
     st.dataframe(
         df[[
@@ -116,7 +132,7 @@ def main():
     fig_tb = px.bar(
         pd.concat([top10, bot10]),
         x="regi", y="accpt_rt", color="Group",
-        title="수용률 Top10 · Bottom10 비교", height=400
+        title="수용률 Top10 vs Bottom10", height=400
     )
     st.plotly_chart(fig_tb, use_container_width=True)
 
