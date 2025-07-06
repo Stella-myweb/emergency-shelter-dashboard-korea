@@ -64,18 +64,8 @@ def fetch_shelter_data():
     """API에서 주민대피시설 데이터 가져오기"""
     
     service_key = "jUxxEMTFyxsIT2rt2P8JBO9y0EmFT9mx1zNPb31XLX27rFNH12NQ+6+ZLqqvW6k/ffQ5ZOOYzzcSo0Fq4u3Lfg=="
-    base_url = "https://apis.data.go.kr/1741000/AirRaidShelterRegion"
-    
-    # 세션 설정
-    session = requests.Session()
-    retry_strategy = Retry(
-        total=3,
-        backoff_factor=1,
-        status_forcelist=[429, 500, 502, 503, 504],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
+    # HTTPS를 HTTP로 변경 - 공공데이터포털 SSL 이슈 해결
+    base_url = "http://apis.data.go.kr/1741000/AirRaidShelterRegion"
     
     all_data = []
     page = 1
@@ -85,17 +75,19 @@ def fetch_shelter_data():
             params = {
                 "serviceKey": service_key,
                 "pageNo": page,
-                "numOfRows": 1000,
+                "numOfRows": 100,  # 한 번에 가져올 데이터 수 줄임
                 "type": "json"
             }
             
-            # SSL 검증 비활성화하여 요청
-            response = session.get(
+            # 일반 HTTP 요청으로 변경
+            response = requests.get(
                 base_url, 
                 params=params, 
                 timeout=30,
-                verify=False,
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'application/json'
+                }
             )
             
             if response.status_code != 200:
@@ -105,45 +97,54 @@ def fetch_shelter_data():
                 
             try:
                 data = response.json()
+                st.info(f"API 응답 구조 확인: {list(data.keys())}")  # 디버깅용
             except json.JSONDecodeError as e:
                 st.error(f"JSON 응답 파싱 실패: {str(e)}")
                 st.error(f"응답 내용: {response.text[:500]}")
                 break
             
-            # API 응답 구조 확인
+            # 다양한 API 응답 구조 처리
+            items = []
             if 'response' in data and 'body' in data['response']:
                 items = data['response']['body'].get('items', [])
-                if not items:
-                    break
-                all_data.extend(items)
-                
-                # 총 개수 확인
                 total_count = data['response']['body'].get('totalCount', 0)
-                if len(all_data) >= total_count:
-                    break
-                    
-                page += 1
-            elif 'items' in data:  # 다른 구조일 경우
+            elif 'items' in data:
                 items = data.get('items', [])
-                if not items:
-                    break
-                all_data.extend(items)
-                page += 1
+                total_count = len(items)
+            elif isinstance(data, list):
+                items = data
+                total_count = len(items)
             else:
                 st.error("예상과 다른 API 응답 구조")
                 st.json(data)  # 실제 응답 구조 확인용
+                break
+            
+            if not items:
+                if page == 1:
+                    st.warning("첫 페이지에서 데이터가 없습니다. API 응답을 확인해주세요.")
+                break
+                
+            all_data.extend(items)
+            st.info(f"페이지 {page}: {len(items)}개 데이터 수집, 총 {len(all_data)}개")
+            
+            # 페이지네이션 처리
+            if len(items) < 100 or len(all_data) >= total_count:
+                break
+                
+            page += 1
+            
+            # 최대 10페이지까지만 (과도한 요청 방지)
+            if page > 10:
+                st.warning("최대 페이지 수에 도달했습니다.")
                 break
                 
         if not all_data:
             st.error("API에서 데이터를 받아오지 못했습니다.")
             return None
             
+        st.success(f"총 {len(all_data)}개의 데이터를 성공적으로 수집했습니다!")
         return pd.DataFrame(all_data)
         
-    except requests.exceptions.SSLError as e:
-        st.error(f"SSL 인증서 오류: {str(e)}")
-        st.info("SSL 인증서 문제로 인해 데이터를 가져올 수 없습니다. 관리자에게 문의하세요.")
-        return None
     except requests.exceptions.RequestException as e:
         st.error(f"API 요청 중 네트워크 오류: {str(e)}")
         return None
@@ -152,7 +153,35 @@ def fetch_shelter_data():
         return None
 
 @st.cache_data
-def process_shelter_data(df):
+def create_sample_data():
+    """API 연결이 안 될 경우 사용할 샘플 데이터 생성"""
+    
+    sample_data = {
+        'regi': ['서울특별시 종로구', '서울특별시 중구', '서울특별시 용산구', '부산광역시 중구', 
+                '부산광역시 서구', '대구광역시 중구', '인천광역시 중구', '광주광역시 동구',
+                '대전광역시 중구', '울산광역시 중구', '경기도 수원시', '경기도 성남시',
+                '경기도 고양시', '경기도 용인시', '강원도 춘천시', '충청북도 청주시',
+                '충청남도 천안시', '전라북도 전주시', '전라남도 목포시', '경상북도 포항시'],
+        'target_popl': [45000, 38000, 52000, 31000, 27000, 29000, 33000, 24000,
+                       41000, 35000, 67000, 58000, 63000, 71000, 22000, 34000,
+                       48000, 39000, 28000, 42000],
+        'shell_abl_popl_smry': [52000, 35000, 48000, 28000, 30000, 25000, 31000, 26000,
+                               38000, 33000, 59000, 54000, 61000, 65000, 25000, 37000,
+                               51000, 36000, 32000, 45000],
+        'accpt_rt': [115.6, 92.1, 92.3, 90.3, 111.1, 86.2, 93.9, 108.3,
+                    92.7, 94.3, 88.1, 93.1, 96.8, 91.5, 113.6, 108.8,
+                    106.3, 92.3, 114.3, 107.1],
+        'gov_shells_shells': [12, 8, 15, 7, 9, 6, 8, 5, 11, 9, 18, 16, 17, 19, 6, 10,
+                             13, 11, 7, 12],
+        'gov_shells_area': [8500, 6200, 11000, 4800, 6800, 4200, 5900, 3800, 7800, 6500,
+                           13500, 12000, 12800, 14200, 4500, 7200, 9800, 8200, 5100, 8900],
+        'pub_shells_shells': [8, 6, 10, 5, 6, 4, 6, 4, 7, 6, 12, 11, 11, 13, 4, 7,
+                             9, 7, 5, 8],
+        'pub_shells_area': [5200, 3800, 6800, 3200, 4200, 2800, 3900, 2600, 4900, 4200,
+                           8800, 7800, 8400, 9200, 2900, 4700, 6400, 5300, 3300, 5800]
+    }
+    
+    return pd.DataFrame(sample_data)
     """대피시설 데이터 전처리"""
     
     if df is None or df.empty:
@@ -354,8 +383,13 @@ def main():
         raw_data = fetch_shelter_data()
         
     if raw_data is None:
-        st.error("데이터를 불러올 수 없습니다. 잠시 후 다시 시도해주세요.")
-        st.stop()
+        st.warning("⚠️ API에서 실시간 데이터를 가져올 수 없어 샘플 데이터를 사용합니다.")
+        st.info("실제 서비스에서는 API 연결을 확인해주세요.")
+        raw_data = create_sample_data()
+        
+        if raw_data is None:
+            st.error("샘플 데이터도 생성할 수 없습니다.")
+            st.stop()
     
     # 데이터 전처리
     with st.spinner("⚙️ 데이터를 분석하는 중..."):
